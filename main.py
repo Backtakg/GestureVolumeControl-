@@ -8,8 +8,8 @@ from pycaw.pycaw import AudioUtilities, IAudioEndpointVolume
 CAMERA_INDEX = 0
 FRAME_WIDTH = 1280
 FRAME_HEIGHT = 720
-MIN_PINCH_DISTANCE = 35
-MAX_PINCH_DISTANCE = 220
+MIN_PINCH_RATIO = 0.22
+MAX_PINCH_RATIO = 1.45
 SMOOTHING = 0.18
 
 
@@ -17,12 +17,39 @@ def clamp(value, low, high):
     return max(low, min(high, value))
 
 
-def distance(a, b, width, height):
-    return math.hypot((a.x - b.x) * width, (a.y - b.y) * height)
+def normalized_distance(a, b):
+    return math.hypot(a.x - b.x, a.y - b.y)
 
 
-def finger_state(hand, tip, pip):
-    return hand.landmark[tip].y < hand.landmark[pip].y
+def pinch_ratio(hand):
+    thumb = hand.landmark[4]
+    index = hand.landmark[8]
+    index_mcp = hand.landmark[5]
+    pinky_mcp = hand.landmark[17]
+    palm_width = normalized_distance(index_mcp, pinky_mcp)
+    if palm_width < 1e-6:
+        return 0.0
+    return normalized_distance(thumb, index) / palm_width
+
+
+def draw_hand_overlay(frame, hand, draw):
+    h, w, _ = frame.shape
+    draw.draw_landmarks(
+        frame,
+        hand,
+        mp.solutions.hands.HAND_CONNECTIONS,
+        draw.DrawingSpec(color=(190, 190, 190), thickness=2, circle_radius=3),
+        draw.DrawingSpec(color=(120, 120, 120), thickness=2),
+    )
+
+    thumb = hand.landmark[4]
+    index = hand.landmark[8]
+    tx, ty = int(thumb.x * w), int(thumb.y * h)
+    ix, iy = int(index.x * w), int(index.y * h)
+
+    cv2.line(frame, (tx, ty), (ix, iy), (0, 255, 0), 4)
+    cv2.circle(frame, (tx, ty), 11, (255, 0, 255), -1)
+    cv2.circle(frame, (ix, iy), 11, (255, 0, 255), -1)
 
 
 def main():
@@ -56,7 +83,6 @@ def main():
         frame = cv2.flip(frame, 1)
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         result = hands.process(rgb)
-        gesture = "Show your hand"
 
         now = time.perf_counter()
         elapsed = now - previous_time
@@ -66,56 +92,26 @@ def main():
 
         if result.multi_hand_landmarks:
             hand = result.multi_hand_landmarks[0]
-            draw.draw_landmarks(frame, hand, mp_hands.HAND_CONNECTIONS)
-            h, w, _ = frame.shape
-            thumb, index = hand.landmark[4], hand.landmark[8]
-            pinch = distance(thumb, index, w, h)
+            draw_hand_overlay(frame, hand, draw)
 
-            thumb_open = finger_state(hand, 4, 3)
-            index_open = finger_state(hand, 8, 6)
-            middle_open = finger_state(hand, 12, 10)
-            ring_open = finger_state(hand, 16, 14)
-            little_open = finger_state(hand, 20, 18)
-
-            x1, y1 = int(thumb.x * w), int(thumb.y * h)
-            x2, y2 = int(index.x * w), int(index.y * h)
-
-            if thumb_open and index_open:
-                normalized = clamp(
-                    (pinch - MIN_PINCH_DISTANCE) / (MAX_PINCH_DISTANCE - MIN_PINCH_DISTANCE),
-                    0.0, 1.0,
-                )
-                target_percent = normalized * 100
-                current_percent += (target_percent - current_percent) * SMOOTHING
-                db = min_db + (current_percent / 100) * (max_db - min_db)
-                volume.SetMasterVolumeLevel(db, None)
-                gesture = f"Volume control: {round(current_percent)}%"
-                cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                cv2.circle(frame, (x1, y1), 9, (255, 0, 255), -1)
-                cv2.circle(frame, (x2, y2), 9, (255, 0, 255), -1)
-            else:
-                gesture = "Show thumb + index"
-
-            states = (
-                f"Thumb: {'OPEN' if thumb_open else 'FOLDED'} | "
-                f"Index: {'OPEN' if index_open else 'FOLDED'} | "
-                f"Middle: {'OPEN' if middle_open else 'FOLDED'} | "
-                f"Ring: {'OPEN' if ring_open else 'FOLDED'} | "
-                f"Little: {'OPEN' if little_open else 'FOLDED'}"
+            ratio = pinch_ratio(hand)
+            normalized = clamp(
+                (ratio - MIN_PINCH_RATIO) / (MAX_PINCH_RATIO - MIN_PINCH_RATIO),
+                0.0,
+                1.0,
             )
-            cv2.putText(frame, states, (30, 705), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 220), 1)
+            target_percent = normalized * 100
+            current_percent += (target_percent - current_percent) * SMOOTHING
+            db = min_db + (current_percent / 100) * (max_db - min_db)
+            volume.SetMasterVolumeLevel(db, None)
 
+            h, w, _ = frame.shape
+            bar_x, bar_y, bar_w, bar_h = 45, 100, 38, 420
             percent = round(current_percent)
-            bar_x, bar_y, bar_w, bar_h = 45, 120, 38, 380
             fill_h = int(bar_h * percent / 100)
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (255, 255, 255), 2)
             cv2.rectangle(frame, (bar_x, bar_y + bar_h - fill_h), (bar_x + bar_w, bar_y + bar_h), (0, 255, 0), -1)
-            cv2.putText(frame, f"{percent}%", (35, 540), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
-
-        cv2.putText(frame, "GESTURE VOLUME CONTROL", (30, 48), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
-        cv2.putText(frame, gesture, (30, 590), cv2.FONT_HERSHEY_SIMPLEX, 0.78, (255, 255, 255), 2)
-        cv2.putText(frame, f"FPS: {fps:.0f}", (30, 625), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200, 200, 200), 2)
-        cv2.putText(frame, "Thumb + index distance = volume | ESC = exit", (30, 665), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200, 200, 200), 2)
+            cv2.circle(frame, (bar_x + bar_w // 2, bar_y + bar_h - fill_h), 9, (0, 255, 0), -1)
 
         cv2.imshow("Gesture Volume Control", frame)
         if cv2.waitKey(1) & 0xFF == 27:
