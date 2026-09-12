@@ -8,6 +8,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
@@ -32,13 +33,14 @@ class MainActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
     private lateinit var volumeText: TextView
     private lateinit var statusText: TextView
+    private lateinit var volumeSlider: ProgressBar
     private lateinit var audioManager: AudioManager
     private lateinit var handLandmarker: HandLandmarker
     private lateinit var cameraExecutor: ExecutorService
 
+    private var lastVolumeCommand = 0L
+    private var smoothedPinchDistance = -1f
     private val uiHandler = Handler(Looper.getMainLooper())
-    private var lastTargetVolume = -1
-    private var smoothedDistance = -1f
 
     private val volumeSync = object : Runnable {
         override fun run() {
@@ -60,6 +62,7 @@ class MainActivity : ComponentActivity() {
         previewView = findViewById(R.id.previewView)
         volumeText = findViewById(R.id.volumeText)
         statusText = findViewById(R.id.statusText)
+        volumeSlider = findViewById(R.id.volumeSlider)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         cameraExecutor = Executors.newSingleThreadExecutor()
 
@@ -111,7 +114,7 @@ class MainActivity : ComponentActivity() {
                             val mpImage = BitmapImageBuilder(bitmap).build()
                             handLandmarker.detectAsync(mpImage, SystemClock.uptimeMillis())
                         } catch (_: Exception) {
-                            // Dropped camera frames are safe; the next frame will be analyzed.
+                            // Dropped frames are safe; the next frame is analyzed.
                         } finally {
                             imageProxy.close()
                         }
@@ -125,47 +128,67 @@ class MainActivity : ComponentActivity() {
                 preview,
                 analysis
             )
-            statusText.text = "Ready — move thumb and index finger"
+            statusText.text = "Ready — only thumb + index control volume"
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processResult(result: HandLandmarkerResult) {
         if (result.landmarks().isEmpty()) {
-            smoothedDistance = -1f
-            runOnUiThread { statusText.text = "Show one hand — thumb + index control volume" }
+            smoothedPinchDistance = -1f
+            runOnUiThread { statusText.text = "Show thumb + index finger" }
             return
         }
 
         val hand = result.landmarks()[0]
+        val now = SystemClock.uptimeMillis()
+
+        // Gesture gate: ONLY thumb and index are allowed to participate.
+        // The other three fingertips must be clearly folded toward the palm.
+        val indexExtended = isIndexExtended(hand)
+        val thumbExtended = isThumbExtended(hand)
+        val otherFingersFolded = isFingerFolded(hand, 12, 10, 9) &&
+            isFingerFolded(hand, 16, 14, 13) &&
+            isFingerFolded(hand, 20, 18, 17)
+
+        if (!indexExtended || !thumbExtended || !otherFingersFolded) {
+            smoothedPinchDistance = -1f
+            runOnUiThread {
+                statusText.text = if (!otherFingersFolded) {
+                    "Keep middle, ring & little fingers folded"
+                } else {
+                    "Show only thumb + index finger"
+                }
+            }
+            return
+        }
+
         val thumb = hand[4]
         val index = hand[8]
-        val rawDistance = distance(thumb, index)
-
-        // Smooth small tracking noise so the phone volume does not jump around.
-        smoothedDistance = if (smoothedDistance < 0f) {
+        val rawDistance = hypot(thumb.x() - index.x(), thumb.y() - index.y())
+        smoothedPinchDistance = if (smoothedPinchDistance < 0f) {
             rawDistance
         } else {
-            smoothedDistance * 0.72f + rawDistance * 0.28f
+            smoothedPinchDistance * 0.72f + rawDistance * 0.28f
         }
 
-        // Closed pinch = minimum volume, wider thumb/index gap = higher volume.
-        val minDistance = 0.025f
-        val maxDistance = 0.32f
-        val normalized = ((smoothedDistance - minDistance) / (maxDistance - minDistance))
+        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val minDistance = 0.035f
+        val maxDistance = 0.30f
+        val normalized = ((smoothedPinchDistance - minDistance) / (maxDistance - minDistance))
             .coerceIn(0f, 1f)
-        val targetPercent = (normalized * 100f).roundToInt()
+        val target = (normalized * max).roundToInt().coerceIn(0, max)
 
-        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        val targetVolume = (normalized * maxVolume).roundToInt().coerceIn(0, maxVolume)
-
-        if (targetVolume != lastTargetVolume) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
-            lastTargetVolume = targetVolume
+        // Hysteresis prevents tiny tracking noise from constantly changing the phone volume.
+        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+        if (now - lastVolumeCommand >= 90L && kotlin.math.abs(target - current) >= 1) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            lastVolumeCommand = now
         }
 
+        val percent = (target * 100f / max).roundToInt()
         runOnUiThread {
-            volumeText.text = "Phone media volume: ${targetPercent}%  ($targetVolume/$maxVolume)"
-            statusText.text = "Thumb ↔ Index: ${targetPercent}% — wider = louder"
+            statusText.text = "Thumb + index distance: $percent%"
+            updateVolumeDisplay()
         }
     }
 
@@ -175,10 +198,55 @@ class MainActivity : ComponentActivity() {
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val percent = (current * 100f / max).roundToInt()
         volumeText.text = "Phone media volume: $percent%  ($current/$max)"
+        if (::volumeSlider.isInitialized) {
+            volumeSlider.max = max
+            volumeSlider.progress = current
+        }
+    }
+
+    private fun isIndexExtended(hand: List<NormalizedLandmark>): Boolean {
+        val tip = hand[8]
+        val pip = hand[6]
+        val mcp = hand[5]
+        val wrist = hand[0]
+        return distance(tip, wrist) > distance(pip, wrist) * 1.10f &&
+            angle(pip, mcp, tip) > 150.0
+    }
+
+    private fun isThumbExtended(hand: List<NormalizedLandmark>): Boolean {
+        val tip = hand[4]
+        val ip = hand[3]
+        val mcp = hand[2]
+        val wrist = hand[0]
+        return distance(tip, wrist) > distance(ip, wrist) * 1.06f &&
+            distance(tip, wrist) > distance(mcp, wrist) * 1.20f &&
+            angle(ip, mcp, tip) > 135.0
+    }
+
+    private fun isFingerFolded(hand: List<NormalizedLandmark>, tip: Int, pip: Int, mcp: Int): Boolean {
+        val wrist = hand[0]
+        val tipDistance = distance(hand[tip], wrist)
+        val pipDistance = distance(hand[pip], wrist)
+        val mcpDistance = distance(hand[mcp], wrist)
+        val jointAngle = angle(hand[pip], hand[mcp], hand[tip])
+        return tipDistance < pipDistance * 1.12f ||
+            tipDistance < mcpDistance * 1.35f ||
+            jointAngle < 145.0
     }
 
     private fun distance(a: NormalizedLandmark, b: NormalizedLandmark): Float =
         hypot(a.x() - b.x(), a.y() - b.y())
+
+    private fun angle(a: NormalizedLandmark, b: NormalizedLandmark, c: NormalizedLandmark): Double {
+        val abx = a.x() - b.x()
+        val aby = a.y() - b.y()
+        val cbx = c.x() - b.x()
+        val cby = c.y() - b.y()
+        val denominator = hypot(abx, aby) * hypot(cbx, cby)
+        if (denominator == 0f) return 0.0
+        val cosine = ((abx * cbx + aby * cby) / denominator).coerceIn(-1f, 1f)
+        return Math.toDegrees(kotlin.math.acos(cosine).toDouble())
+    }
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(volumeSync)
