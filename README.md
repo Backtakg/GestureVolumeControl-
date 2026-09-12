@@ -1,67 +1,82 @@
 # Gesture Volume Control 🎛️
 
-A free, local Windows desktop application that controls system audio with hand gestures and a webcam.
+A zero-cost computer-vision project that controls audio volume with hand gestures. It now has **two local implementations**:
+
+- 🖥️ **Windows desktop:** Python + OpenCV + MediaPipe + Pycaw
+- 📱 **Android phone:** Kotlin + CameraX + MediaPipe + Android AudioManager
 
 ## ✨ Features
 
-- 🖐️ Real-time hand landmark tracking with MediaPipe
-- 🤏 Thumb + index finger distance controls volume from 0–100%
+- 🖐️ Real-time hand landmark tracking
+- 🤏 Thumb + index finger distance controls volume
 - ✊ Closed-fist gesture toggles mute
-- 🎚️ Smooth volume transitions to reduce jitter
-- 📊 Live volume bar and percentage
-- ⚡ FPS counter for performance visibility
-- 🔒 Fully local — no cloud service, account, or paid API
-- 💻 Built with free/open-source software
+- 🎚️ Smoothed desktop volume transitions
+- 📊 Live volume display
+- ⚡ Desktop FPS counter
+- 🔒 Fully local — no account, cloud server, or paid API
+- 💻 Free/open-source development stack
+- 📱 Native Android phone volume control
 
-## 🧰 Tech Stack
+## 🖥️ Windows Desktop
 
-- Python 3.9+
-- OpenCV
-- MediaPipe
-- Pycaw
-- Comtypes
-- NumPy
-
-## 🖥️ Requirements
+### Requirements
 
 - Windows
-- Python 3.9 or newer
-- Working webcam
+- Python 3.9+
+- Webcam
 - Windows audio output device
 
-## 🚀 Run Locally
+### Run
 
 ```bash
 pip install -r requirements.txt
 python main.py
 ```
 
-### Controls
-
 | Gesture | Action |
 |---|---|
 | 🤏 Thumb + index apart | Increase volume |
 | 🤏 Thumb + index together | Decrease volume |
 | ✊ Closed fist | Toggle mute |
-| `ESC` | Exit application |
+| `ESC` | Exit |
 
-## ⚙️ Configuration
+The Python version uses Pycaw to control the Windows system audio endpoint.
 
-The main settings are at the top of `main.py`:
+## 📱 Android Phone
 
-- `CAMERA_INDEX` — select a webcam
-- `FRAME_WIDTH` / `FRAME_HEIGHT` — camera resolution
-- `MIN_PINCH_DISTANCE` / `MAX_PINCH_DISTANCE` — gesture sensitivity
-- `SMOOTHING` — volume transition smoothness
+The `android/` directory contains a native Android app. It uses the phone's **front camera** to detect the hand and Android's `AudioManager` to change `STREAM_MUSIC` volume directly on the device.
+
+### Android gesture controls
+
+| Gesture | Action |
+|---|---|
+| 🤏 Thumb + index farther apart | Increase media volume |
+| 🤏 Thumb + index closer together | Decrease media volume |
+| ✊ Closed fist | Toggle mute |
+
+### Build
+
+Open the `android/` folder in Android Studio and build the `app` module. The Gradle build downloads the MediaPipe hand-landmarker model automatically into the app's assets on the first build.
+
+A physical Android phone with a camera is recommended for testing because gesture tracking needs a live camera feed.
+
+## 🧰 Android Stack
+
+- Kotlin
+- Android SDK
+- CameraX
+- MediaPipe Tasks Vision
+- Android `AudioManager`
+- Gradle
 
 ## 🧠 How It Works
 
-1. OpenCV captures frames from the webcam.
-2. MediaPipe detects the hand and its landmarks.
-3. The application measures the distance between the thumb and index finger.
-4. That distance is mapped to a 0–100% volume value.
-5. Pycaw sends the calculated value to the Windows audio endpoint.
-6. A closed fist toggles the Windows mute state.
+1. The camera captures a live frame.
+2. MediaPipe detects hand landmarks locally on the device.
+3. The app measures thumb/index distance.
+4. The distance is mapped to a volume level.
+5. Windows uses Pycaw; Android uses `AudioManager`.
+6. A fist toggles mute, with edge detection so holding a fist does not repeatedly toggle mute.
 
 ## 📁 Project Structure
 
@@ -69,25 +84,40 @@ The main settings are at the top of `main.py`:
 GestureVolumeControl-/
 ├── main.py
 ├── requirements.txt
-└── README.md
+├── README.md
+└── android/
+    ├── build.gradle.kts
+    ├── settings.gradle.kts
+    └── app/
+        ├── build.gradle.kts
+        └── src/main/
+            ├── AndroidManifest.xml
+            ├── java/com/backtakg/gesturevolume/MainActivity.kt
+            └── res/
+                ├── layout/activity_main.xml
+                └── values/styles.xml
 ```
 
 ## 💰 Cost
 
-**NPR 0 / $0.** The project uses free/open-source packages and an existing webcam. No paid API, subscription, or cloud server is required.
+**NPR 0 / $0.** No paid API, cloud server, subscription, or special hardware is required. You can develop and test the Android version on your own Android phone.
 
 ## 💼 Portfolio Value
 
 This project demonstrates:
 
-- Real-time computer vision
+- Computer vision
 - Hand landmark detection
 - Gesture-based human-computer interaction
-- Hardware/webcam input
+- Native Android development
+- CameraX camera processing
+- Android system audio integration
 - Windows system audio integration
-- Real-time performance monitoring
-- Python application development
+- Kotlin + Python
+- Real-time application development
 
-## ⚠️ Platform Note
+## ⚠️ Platform Notes
 
-Gesture recognition is designed to be portable, but system-volume control currently uses Pycaw/Windows audio APIs and therefore targets Windows.
+- The Windows implementation targets Windows because Pycaw uses Windows audio APIs.
+- The Android implementation controls the **phone's own media volume**. It does not remotely change a different device's volume.
+- The Android model is downloaded during the Gradle build rather than committed as a large binary file, keeping the Git repository lightweight.
