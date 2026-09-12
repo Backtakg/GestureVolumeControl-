@@ -142,8 +142,6 @@ class MainActivity : ComponentActivity() {
         val hand = result.landmarks()[0]
         val now = SystemClock.uptimeMillis()
 
-        // Gesture gate: ONLY thumb and index are allowed to participate.
-        // The other three fingertips must be clearly folded toward the palm.
         val indexExtended = isIndexExtended(hand)
         val thumbExtended = isThumbExtended(hand)
         val otherFingersFolded = isFingerFolded(hand, 12, 10, 9) &&
@@ -178,10 +176,9 @@ class MainActivity : ComponentActivity() {
             .coerceIn(0f, 1f)
         val target = (normalized * max).roundToInt().coerceIn(0, max)
 
-        // Hysteresis prevents tiny tracking noise from constantly changing the phone volume.
         val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         if (now - lastVolumeCommand >= 90L && kotlin.math.abs(target - current) >= 1) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
             lastVolumeCommand = now
         }
 
@@ -197,7 +194,7 @@ class MainActivity : ComponentActivity() {
         val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val percent = (current * 100f / max).roundToInt()
-        volumeText.text = "Phone media volume: $percent%  ($current/$max)"
+        volumeText.text = "Phone media volume: $percent%"
         if (::volumeSlider.isInitialized) {
             volumeSlider.max = max
             volumeSlider.progress = current
