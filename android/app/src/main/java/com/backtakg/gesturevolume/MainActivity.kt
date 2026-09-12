@@ -151,15 +151,12 @@ class MainActivity : ComponentActivity() {
             fingerDetectionText.text = "Thumb: ${state(thumbExtended)}   Index: ${state(indexExtended)}   Middle: ${state(middleExtended)}   Ring: ${state(ringExtended)}   Little: ${state(littleExtended)}"
         }
 
-        val otherFingersFolded = !middleExtended && !ringExtended && !littleExtended
-        if (!indexExtended || !thumbExtended || !otherFingersFolded) {
+        // Only thumb + index matter for volume control.
+        // Middle, ring and little fingers are intentionally ignored.
+        if (!indexExtended || !thumbExtended) {
             smoothedPinchDistance = -1f
             runOnUiThread {
-                statusText.text = if (!otherFingersFolded) {
-                    "Fold middle, ring & little fingers"
-                } else {
-                    "Show thumb + index finger"
-                }
+                statusText.text = "Show thumb + index finger — other fingers can be anywhere"
             }
             return
         }
