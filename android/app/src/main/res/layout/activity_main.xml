@@ -17,28 +17,29 @@
         android:gravity="center"
         android:paddingBottom="10dp" />
 
-    <androidx.camera.view.PreviewView
-        android:id="@+id/previewView"
+    <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1" />
+        android:layout_weight="1">
 
-    <TextView
-        android:id="@+id/fingerDetectionText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Thumb: —   Index: —   Middle: —   Ring: —   Little: —"
-        android:textColor="#B8BCC7"
-        android:textSize="12sp"
-        android:gravity="center"
-        android:paddingTop="8dp"
-        android:paddingBottom="4dp" />
+        <androidx.camera.view.PreviewView
+            android:id="@+id/previewView"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <com.backtakg.gesturevolume.HandOverlayView
+            android:id="@+id/handOverlay"
+            android:layout_width="match_parent"
+            android:layout_height="match_parent"
+            android:clickable="false"
+            android:focusable="false" />
+    </FrameLayout>
 
     <TextView
         android:id="@+id/volumeText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
-        android:text="Phone media volume: --%"
+        android:text="--%"
         android:textColor="#FFFFFF"
         android:textSize="28sp"
         android:textStyle="bold"
@@ -54,25 +55,5 @@
         android:progress="0"
         android:indeterminate="false"
         android:layout_marginTop="8dp"
-        android:layout_marginBottom="8dp" />
-
-    <TextView
-        android:id="@+id/statusText"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Starting camera..."
-        android:textColor="#B8BCC7"
-        android:textSize="15sp"
-        android:gravity="center"
-        android:paddingTop="4dp"
-        android:paddingBottom="8dp" />
-
-    <TextView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="Pinch thumb + index = volume"
-        android:textColor="#B8BCC7"
-        android:textSize="13sp"
-        android:gravity="center"
-        android:paddingBottom="4dp" />
+        android:layout_marginBottom="4dp" />
 </LinearLayout>
