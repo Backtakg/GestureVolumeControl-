@@ -1,3 +1,5 @@
+import java.net.URI
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -25,7 +27,7 @@ tasks.register("downloadHandModel") {
         if (!modelFile.exists()) {
             modelFile.parentFile.mkdirs()
             println("Downloading MediaPipe hand landmarker model...")
-            java.net.URI(modelUrl).toURL().openStream().use { input ->
+            URI(modelUrl).toURL().openStream().use { input ->
                 modelFile.outputStream().use { output -> input.copyTo(output) }
             }
         }
