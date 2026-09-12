@@ -47,8 +47,8 @@ def main():
     draw = mp.solutions.drawing_utils
 
     current_percent = volume.GetMasterVolumeLevelScalar() * 100
-    muted = False
-    last_fist_time = 0.0
+    muted = bool(volume.GetMute())
+    fist_was_down = False
     previous_time = time.perf_counter()
     fps = 0.0
 
@@ -76,15 +76,15 @@ def main():
             pinch = distance(thumb, index, w, h)
             x1, y1 = int(thumb.x * w), int(thumb.y * h)
             x2, y2 = int(index.x * w), int(index.y * h)
+            fist_down = is_fist(hand)
 
-            if is_fist(hand) and now - last_fist_time > 0.8:
+            # Toggle only when the hand enters the fist gesture.
+            if fist_down and not fist_was_down:
                 muted = not muted
                 volume.SetMute(muted, None)
-                last_fist_time = now
+            fist_was_down = fist_down
 
-            if muted:
-                gesture = "MUTED - open hand to control volume"
-            else:
+            if not muted:
                 normalized = clamp(
                     (pinch - MIN_PINCH_DISTANCE) / (MAX_PINCH_DISTANCE - MIN_PINCH_DISTANCE),
                     0.0, 1.0,
@@ -97,6 +97,8 @@ def main():
                 cv2.line(frame, (x1, y1), (x2, y2), (0, 255, 0), 3)
                 cv2.circle(frame, (x1, y1), 9, (255, 0, 255), -1)
                 cv2.circle(frame, (x2, y2), 9, (255, 0, 255), -1)
+            else:
+                gesture = "MUTED - make a fist again to unmute"
 
             percent = 0 if muted else round(current_percent)
             bar_x, bar_y, bar_w, bar_h = 45, 120, 38, 380
