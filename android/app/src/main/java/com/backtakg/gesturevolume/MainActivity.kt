@@ -36,9 +36,9 @@ class MainActivity : ComponentActivity() {
     private lateinit var handLandmarker: HandLandmarker
     private lateinit var cameraExecutor: ExecutorService
 
-    private var lastGesture = "NONE"
-    private var lastVolumeCommand = 0L
     private val uiHandler = Handler(Looper.getMainLooper())
+    private var lastTargetVolume = -1
+    private var smoothedDistance = -1f
 
     private val volumeSync = object : Runnable {
         override fun run() {
@@ -125,52 +125,47 @@ class MainActivity : ComponentActivity() {
                 preview,
                 analysis
             )
-            statusText.text = "Ready — use thumbs up/down"
+            statusText.text = "Ready — move thumb and index finger"
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processResult(result: HandLandmarkerResult) {
         if (result.landmarks().isEmpty()) {
-            lastGesture = "NONE"
-            runOnUiThread {
-                statusText.text = "Show one hand — 👍 up / 👎 down"
-            }
+            smoothedDistance = -1f
+            runOnUiThread { statusText.text = "Show one hand — thumb + index control volume" }
             return
         }
 
         val hand = result.landmarks()[0]
-        val gesture = classifyGesture(hand)
-        val now = SystemClock.uptimeMillis()
+        val thumb = hand[4]
+        val index = hand[8]
+        val rawDistance = distance(thumb, index)
 
-        if (gesture != "NONE" && gesture != "OPEN" && now - lastVolumeCommand >= 140L) {
-            when (gesture) {
-                "THUMB_UP" -> changeVolumeBy(1)
-                "THUMB_DOWN" -> changeVolumeBy(-1)
-            }
-            lastVolumeCommand = now
+        // Smooth small tracking noise so the phone volume does not jump around.
+        smoothedDistance = if (smoothedDistance < 0f) {
+            rawDistance
+        } else {
+            smoothedDistance * 0.72f + rawDistance * 0.28f
         }
-        lastGesture = gesture
 
-        val gestureText = when (gesture) {
-            "THUMB_UP" -> "👍 Volume UP"
-            "THUMB_DOWN" -> "👎 Volume DOWN"
-            "FIST" -> "✊ Fist detected — no action"
-            "OPEN" -> "✋ Open hand — ready"
-            else -> "Show 👍 up or 👎 down"
+        // Closed pinch = minimum volume, wider thumb/index gap = higher volume.
+        val minDistance = 0.025f
+        val maxDistance = 0.32f
+        val normalized = ((smoothedDistance - minDistance) / (maxDistance - minDistance))
+            .coerceIn(0f, 1f)
+        val targetPercent = (normalized * 100f).roundToInt()
+
+        val maxVolume = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
+        val targetVolume = (normalized * maxVolume).roundToInt().coerceIn(0, maxVolume)
+
+        if (targetVolume != lastTargetVolume) {
+            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, targetVolume, 0)
+            lastTargetVolume = targetVolume
         }
 
         runOnUiThread {
-            statusText.text = gestureText
-            updateVolumeDisplay()
-        }
-    }
-
-    private fun changeVolumeBy(direction: Int) {
-        val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC)
-        val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
-        val target = (current + direction).coerceIn(0, max)
-        if (target != current) {
-            audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, 0)
+            volumeText.text = "Phone media volume: ${targetPercent}%  ($targetVolume/$maxVolume)"
+            statusText.text = "Thumb ↔ Index: ${targetPercent}% — wider = louder"
         }
     }
 
@@ -182,93 +177,8 @@ class MainActivity : ComponentActivity() {
         volumeText.text = "Phone media volume: $percent%  ($current/$max)"
     }
 
-    private fun classifyGesture(hand: List<NormalizedLandmark>): String {
-        if (isFist(hand)) return "FIST"
-
-        val indexExtended = isFingerExtended(hand, 8, 6, 5)
-        val middleExtended = isFingerExtended(hand, 12, 10, 9)
-        val ringExtended = isFingerExtended(hand, 16, 14, 13)
-        val pinkyExtended = isFingerExtended(hand, 20, 18, 17)
-        val thumbExtended = isThumbExtended(hand)
-
-        // Thumb-only gesture: index/middle/ring/pinky must stay folded.
-        if (thumbExtended && !indexExtended && !middleExtended && !ringExtended && !pinkyExtended) {
-            val wrist = hand[0]
-            val thumbTip = hand[4]
-            val thumbMcp = hand[2]
-            val thumbUp = thumbTip.y() < thumbMcp.y() - 0.025f
-            val thumbDown = thumbTip.y() > thumbMcp.y() + 0.025f
-            if (thumbUp) return "THUMB_UP"
-            if (thumbDown) return "THUMB_DOWN"
-        }
-
-        if (indexExtended && middleExtended && ringExtended && pinkyExtended) return "OPEN"
-        return "NONE"
-    }
-
-    private fun isFingerExtended(hand: List<NormalizedLandmark>, tip: Int, pip: Int, mcp: Int): Boolean {
-        val wrist = hand[0]
-        val tipPoint = hand[tip]
-        val pipPoint = hand[pip]
-        val mcpPoint = hand[mcp]
-
-        val tipFromWrist = distance(tipPoint, wrist)
-        val pipFromWrist = distance(pipPoint, wrist)
-        val mcpFromWrist = distance(mcpPoint, wrist)
-        val jointAngle = angle(pipPoint, mcpPoint, tipPoint)
-
-        return tipFromWrist > pipFromWrist * 1.10f &&
-            tipFromWrist > mcpFromWrist * 1.35f &&
-            jointAngle > 150.0
-    }
-
-    private fun isThumbExtended(hand: List<NormalizedLandmark>): Boolean {
-        val wrist = hand[0]
-        val thumbTip = hand[4]
-        val thumbIp = hand[3]
-        val thumbMcp = hand[2]
-        val thumbCmc = hand[1]
-
-        val tipDistance = distance(thumbTip, wrist)
-        val ipDistance = distance(thumbIp, wrist)
-        val cmcDistance = distance(thumbCmc, wrist)
-        val jointAngle = angle(thumbIp, thumbMcp, thumbTip)
-
-        return tipDistance > ipDistance * 1.08f &&
-            tipDistance > cmcDistance * 1.30f &&
-            jointAngle > 145.0
-    }
-
-    private fun isFist(hand: List<NormalizedLandmark>): Boolean {
-        val indexFolded = isFingerFolded(hand, 8, 6, 5)
-        val middleFolded = isFingerFolded(hand, 12, 10, 9)
-        val ringFolded = isFingerFolded(hand, 16, 14, 13)
-        val pinkyFolded = isFingerFolded(hand, 20, 18, 17)
-        val thumbFolded = distance(hand[4], hand[5]) < distance(hand[3], hand[5]) * 1.20f
-        return indexFolded && middleFolded && ringFolded && pinkyFolded && thumbFolded
-    }
-
-    private fun isFingerFolded(hand: List<NormalizedLandmark>, tip: Int, pip: Int, mcp: Int): Boolean {
-        val wrist = hand[0]
-        val tipDistance = distance(hand[tip], wrist)
-        val mcpDistance = distance(hand[mcp], wrist)
-        val pipDistance = distance(hand[pip], wrist)
-        return tipDistance < pipDistance * 1.08f || tipDistance < mcpDistance * 1.45f
-    }
-
     private fun distance(a: NormalizedLandmark, b: NormalizedLandmark): Float =
         hypot(a.x() - b.x(), a.y() - b.y())
-
-    private fun angle(a: NormalizedLandmark, b: NormalizedLandmark, c: NormalizedLandmark): Double {
-        val abx = a.x() - b.x()
-        val aby = a.y() - b.y()
-        val cbx = c.x() - b.x()
-        val cby = c.y() - b.y()
-        val denominator = hypot(abx, aby) * hypot(cbx, cby)
-        if (denominator == 0f) return 0.0
-        val cosine = ((abx * cbx + aby * cby) / denominator).coerceIn(-1f, 1f)
-        return Math.toDegrees(kotlin.math.acos(cosine).toDouble())
-    }
 
     override fun onDestroy() {
         uiHandler.removeCallbacks(volumeSync)
