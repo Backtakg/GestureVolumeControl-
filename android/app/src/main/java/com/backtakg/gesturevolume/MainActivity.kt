@@ -4,8 +4,8 @@ import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.Canvas
+import android.graphics.Color
 import android.graphics.Paint
-import android.graphics.Path
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
@@ -139,7 +139,7 @@ class MainActivity : ComponentActivity() {
         val now = SystemClock.uptimeMillis()
         runOnUiThread { handOverlay.setLandmarks(hand) }
 
-        // Only thumb + index distance controls volume. The other three fingers are ignored.
+        // Only thumb + index distance controls volume. Other fingers are ignored.
         val thumb = hand[4]
         val index = hand[8]
         val rawDistance = hypot(thumb.x() - index.x(), thumb.y() - index.y())
@@ -182,14 +182,17 @@ class MainActivity : ComponentActivity() {
 class HandOverlayView(context: Context) : View(context) {
     private var landmarks: List<NormalizedLandmark>? = null
     private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
         strokeWidth = 5f
         style = Paint.Style.STROKE
     }
     private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        color = Color.WHITE
         style = Paint.Style.FILL
     }
     private val pinchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        strokeWidth = 8f
+        color = Color.GREEN
+        strokeWidth = 9f
         style = Paint.Style.STROKE
     }
 
@@ -212,21 +215,18 @@ class HandOverlayView(context: Context) : View(context) {
         val hand = landmarks ?: return
         if (hand.size < 21 || width <= 0 || height <= 0) return
 
-        linePaint.strokeWidth = 5f
         for (connection in connections) {
             val a = hand[connection[0]]
             val b = hand[connection[1]]
             canvas.drawLine(a.x() * width, a.y() * height, b.x() * width, b.y() * height, linePaint)
         }
 
-        for (i in hand.indices) {
-            pointPaint.radius = 8f
-            canvas.drawCircle(hand[i].x() * width, hand[i].y() * height, 8f, pointPaint)
+        for (landmark in hand) {
+            canvas.drawCircle(landmark.x() * width, landmark.y() * height, 8f, pointPaint)
         }
 
         val thumb = hand[4]
         val index = hand[8]
-        pinchPaint.strokeWidth = 9f
         canvas.drawLine(
             thumb.x() * width,
             thumb.y() * height,
