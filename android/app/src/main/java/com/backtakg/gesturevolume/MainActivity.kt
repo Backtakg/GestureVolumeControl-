@@ -31,6 +31,7 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
+    private lateinit var fingerDetectionText: TextView
     private lateinit var volumeText: TextView
     private lateinit var statusText: TextView
     private lateinit var volumeSlider: ProgressBar
@@ -60,6 +61,7 @@ class MainActivity : ComponentActivity() {
         setContentView(R.layout.activity_main)
 
         previewView = findViewById(R.id.previewView)
+        fingerDetectionText = findViewById(R.id.fingerDetectionText)
         volumeText = findViewById(R.id.volumeText)
         statusText = findViewById(R.id.statusText)
         volumeSlider = findViewById(R.id.volumeSlider)
@@ -114,7 +116,6 @@ class MainActivity : ComponentActivity() {
                             val mpImage = BitmapImageBuilder(bitmap).build()
                             handLandmarker.detectAsync(mpImage, SystemClock.uptimeMillis())
                         } catch (_: Exception) {
-                            // Dropped frames are safe; the next frame is analyzed.
                         } finally {
                             imageProxy.close()
                         }
@@ -122,12 +123,7 @@ class MainActivity : ComponentActivity() {
                 }
 
             provider.unbindAll()
-            provider.bindToLifecycle(
-                this,
-                CameraSelector.DEFAULT_FRONT_CAMERA,
-                preview,
-                analysis
-            )
+            provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
             statusText.text = "Ready — only thumb + index control volume"
         }, ContextCompat.getMainExecutor(this))
     }
@@ -135,26 +131,34 @@ class MainActivity : ComponentActivity() {
     private fun processResult(result: HandLandmarkerResult) {
         if (result.landmarks().isEmpty()) {
             smoothedPinchDistance = -1f
-            runOnUiThread { statusText.text = "Show thumb + index finger" }
+            runOnUiThread {
+                fingerDetectionText.text = "Thumb: —   Index: —   Middle: —   Ring: —   Little: —"
+                statusText.text = "Show your hand"
+            }
             return
         }
 
         val hand = result.landmarks()[0]
         val now = SystemClock.uptimeMillis()
 
-        val indexExtended = isIndexExtended(hand)
         val thumbExtended = isThumbExtended(hand)
-        val otherFingersFolded = isFingerFolded(hand, 12, 10, 9) &&
-            isFingerFolded(hand, 16, 14, 13) &&
-            isFingerFolded(hand, 20, 18, 17)
+        val indexExtended = isIndexExtended(hand)
+        val middleExtended = isFingerExtended(hand, 12, 10, 9)
+        val ringExtended = isFingerExtended(hand, 16, 14, 13)
+        val littleExtended = isFingerExtended(hand, 20, 18, 17)
 
+        runOnUiThread {
+            fingerDetectionText.text = "Thumb: ${state(thumbExtended)}   Index: ${state(indexExtended)}   Middle: ${state(middleExtended)}   Ring: ${state(ringExtended)}   Little: ${state(littleExtended)}"
+        }
+
+        val otherFingersFolded = !middleExtended && !ringExtended && !littleExtended
         if (!indexExtended || !thumbExtended || !otherFingersFolded) {
             smoothedPinchDistance = -1f
             runOnUiThread {
                 statusText.text = if (!otherFingersFolded) {
-                    "Keep middle, ring & little fingers folded"
+                    "Fold middle, ring & little fingers"
                 } else {
-                    "Show only thumb + index finger"
+                    "Show thumb + index finger"
                 }
             }
             return
@@ -163,20 +167,14 @@ class MainActivity : ComponentActivity() {
         val thumb = hand[4]
         val index = hand[8]
         val rawDistance = hypot(thumb.x() - index.x(), thumb.y() - index.y())
-        smoothedPinchDistance = if (smoothedPinchDistance < 0f) {
-            rawDistance
-        } else {
-            smoothedPinchDistance * 0.72f + rawDistance * 0.28f
-        }
+        smoothedPinchDistance = if (smoothedPinchDistance < 0f) rawDistance
+        else smoothedPinchDistance * 0.72f + rawDistance * 0.28f
 
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
-        val minDistance = 0.035f
-        val maxDistance = 0.30f
-        val normalized = ((smoothedPinchDistance - minDistance) / (maxDistance - minDistance))
-            .coerceIn(0f, 1f)
+        val normalized = ((smoothedPinchDistance - 0.035f) / (0.30f - 0.035f)).coerceIn(0f, 1f)
         val target = (normalized * max).roundToInt().coerceIn(0, max)
-
         val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
+
         if (now - lastVolumeCommand >= 90L && kotlin.math.abs(target - current) >= 1) {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
             lastVolumeCommand = now
@@ -188,6 +186,8 @@ class MainActivity : ComponentActivity() {
             updateVolumeDisplay()
         }
     }
+
+    private fun state(extended: Boolean): String = if (extended) "OPEN" else "FOLDED"
 
     private fun updateVolumeDisplay() {
         if (!::audioManager.isInitialized || !::volumeText.isInitialized) return
@@ -201,14 +201,8 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun isIndexExtended(hand: List<NormalizedLandmark>): Boolean {
-        val tip = hand[8]
-        val pip = hand[6]
-        val mcp = hand[5]
-        val wrist = hand[0]
-        return distance(tip, wrist) > distance(pip, wrist) * 1.10f &&
-            angle(pip, mcp, tip) > 150.0
-    }
+    private fun isIndexExtended(hand: List<NormalizedLandmark>): Boolean =
+        isFingerExtended(hand, 8, 6, 5, 150.0)
 
     private fun isThumbExtended(hand: List<NormalizedLandmark>): Boolean {
         val tip = hand[4]
@@ -220,15 +214,10 @@ class MainActivity : ComponentActivity() {
             angle(ip, mcp, tip) > 135.0
     }
 
-    private fun isFingerFolded(hand: List<NormalizedLandmark>, tip: Int, pip: Int, mcp: Int): Boolean {
+    private fun isFingerExtended(hand: List<NormalizedLandmark>, tip: Int, pip: Int, mcp: Int, minAngle: Double = 145.0): Boolean {
         val wrist = hand[0]
-        val tipDistance = distance(hand[tip], wrist)
-        val pipDistance = distance(hand[pip], wrist)
-        val mcpDistance = distance(hand[mcp], wrist)
-        val jointAngle = angle(hand[pip], hand[mcp], hand[tip])
-        return tipDistance < pipDistance * 1.12f ||
-            tipDistance < mcpDistance * 1.35f ||
-            jointAngle < 145.0
+        return distance(hand[tip], wrist) > distance(hand[pip], wrist) * 1.10f &&
+            angle(hand[pip], hand[mcp], hand[tip]) > minAngle
     }
 
     private fun distance(a: NormalizedLandmark, b: NormalizedLandmark): Float =
