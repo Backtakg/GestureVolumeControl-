@@ -24,6 +24,17 @@
         android:layout_weight="1" />
 
     <TextView
+        android:id="@+id/fingerDetectionText"
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:text="Thumb: —   Index: —   Middle: —   Ring: —   Little: —"
+        android:textColor="#B8BCC7"
+        android:textSize="12sp"
+        android:gravity="center"
+        android:paddingTop="8dp"
+        android:paddingBottom="4dp" />
+
+    <TextView
         android:id="@+id/volumeText"
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
@@ -32,7 +43,7 @@
         android:textSize="28sp"
         android:textStyle="bold"
         android:gravity="center"
-        android:paddingTop="12dp" />
+        android:paddingTop="8dp" />
 
     <ProgressBar
         android:id="@+id/volumeSlider"
