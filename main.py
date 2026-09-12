@@ -21,10 +21,8 @@ def distance(a, b, width, height):
     return math.hypot((a.x - b.x) * width, (a.y - b.y) * height)
 
 
-def is_fist(hand):
-    tips = (8, 12, 16, 20)
-    pips = (6, 10, 14, 18)
-    return all(hand.landmark[t].y > hand.landmark[p].y for t, p in zip(tips, pips))
+def finger_state(hand, tip, pip):
+    return hand.landmark[tip].y < hand.landmark[pip].y
 
 
 def main():
@@ -47,8 +45,6 @@ def main():
     draw = mp.solutions.drawing_utils
 
     current_percent = volume.GetMasterVolumeLevelScalar() * 100
-    muted = bool(volume.GetMute())
-    fist_was_down = False
     previous_time = time.perf_counter()
     fps = 0.0
 
@@ -74,17 +70,17 @@ def main():
             h, w, _ = frame.shape
             thumb, index = hand.landmark[4], hand.landmark[8]
             pinch = distance(thumb, index, w, h)
+
+            thumb_open = finger_state(hand, 4, 3)
+            index_open = finger_state(hand, 8, 6)
+            middle_open = finger_state(hand, 12, 10)
+            ring_open = finger_state(hand, 16, 14)
+            little_open = finger_state(hand, 20, 18)
+
             x1, y1 = int(thumb.x * w), int(thumb.y * h)
             x2, y2 = int(index.x * w), int(index.y * h)
-            fist_down = is_fist(hand)
 
-            # Toggle only when the hand enters the fist gesture.
-            if fist_down and not fist_was_down:
-                muted = not muted
-                volume.SetMute(muted, None)
-            fist_was_down = fist_down
-
-            if not muted:
+            if thumb_open and index_open:
                 normalized = clamp(
                     (pinch - MIN_PINCH_DISTANCE) / (MAX_PINCH_DISTANCE - MIN_PINCH_DISTANCE),
                     0.0, 1.0,
@@ -98,9 +94,18 @@ def main():
                 cv2.circle(frame, (x1, y1), 9, (255, 0, 255), -1)
                 cv2.circle(frame, (x2, y2), 9, (255, 0, 255), -1)
             else:
-                gesture = "MUTED - make a fist again to unmute"
+                gesture = "Show thumb + index"
 
-            percent = 0 if muted else round(current_percent)
+            states = (
+                f"Thumb: {'OPEN' if thumb_open else 'FOLDED'} | "
+                f"Index: {'OPEN' if index_open else 'FOLDED'} | "
+                f"Middle: {'OPEN' if middle_open else 'FOLDED'} | "
+                f"Ring: {'OPEN' if ring_open else 'FOLDED'} | "
+                f"Little: {'OPEN' if little_open else 'FOLDED'}"
+            )
+            cv2.putText(frame, states, (30, 705), cv2.FONT_HERSHEY_SIMPLEX, 0.48, (220, 220, 220), 1)
+
+            percent = round(current_percent)
             bar_x, bar_y, bar_w, bar_h = 45, 120, 38, 380
             fill_h = int(bar_h * percent / 100)
             cv2.rectangle(frame, (bar_x, bar_y), (bar_x + bar_w, bar_y + bar_h), (255, 255, 255), 2)
@@ -110,7 +115,7 @@ def main():
         cv2.putText(frame, "GESTURE VOLUME CONTROL", (30, 48), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (255, 255, 255), 2)
         cv2.putText(frame, gesture, (30, 590), cv2.FONT_HERSHEY_SIMPLEX, 0.78, (255, 255, 255), 2)
         cv2.putText(frame, f"FPS: {fps:.0f}", (30, 625), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200, 200, 200), 2)
-        cv2.putText(frame, "Pinch = volume | Fist = mute | ESC = exit", (30, 665), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200, 200, 200), 2)
+        cv2.putText(frame, "Thumb + index distance = volume | ESC = exit", (30, 665), cv2.FONT_HERSHEY_SIMPLEX, 0.62, (200, 200, 200), 2)
 
         cv2.imshow("Gesture Volume Control", frame)
         if cv2.waitKey(1) & 0xFF == 27:
