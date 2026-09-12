@@ -3,11 +3,15 @@ package com.backtakg.gesturevolume
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
+import android.graphics.Canvas
+import android.graphics.Paint
+import android.graphics.Path
 import android.media.AudioManager
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.View
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.activity.ComponentActivity
@@ -31,9 +35,8 @@ import kotlin.math.roundToInt
 
 class MainActivity : ComponentActivity() {
     private lateinit var previewView: PreviewView
-    private lateinit var fingerDetectionText: TextView
+    private lateinit var handOverlay: HandOverlayView
     private lateinit var volumeText: TextView
-    private lateinit var statusText: TextView
     private lateinit var volumeSlider: ProgressBar
     private lateinit var audioManager: AudioManager
     private lateinit var handLandmarker: HandLandmarker
@@ -53,7 +56,7 @@ class MainActivity : ComponentActivity() {
     private val permissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { granted ->
-        if (granted) startCamera() else statusText.text = "Camera permission is required"
+        if (granted) startCamera()
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,9 +64,8 @@ class MainActivity : ComponentActivity() {
         setContentView(R.layout.activity_main)
 
         previewView = findViewById(R.id.previewView)
-        fingerDetectionText = findViewById(R.id.fingerDetectionText)
+        handOverlay = findViewById(R.id.handOverlay)
         volumeText = findViewById(R.id.volumeText)
-        statusText = findViewById(R.id.statusText)
         volumeSlider = findViewById(R.id.volumeSlider)
         audioManager = getSystemService(Context.AUDIO_SERVICE) as AudioManager
         cameraExecutor = Executors.newSingleThreadExecutor()
@@ -92,7 +94,6 @@ class MainActivity : ComponentActivity() {
             .setMinHandPresenceConfidence(0.65f)
             .setMinTrackingConfidence(0.65f)
             .setResultListener { result, _ -> processResult(result) }
-            .setErrorListener { error -> runOnUiThread { statusText.text = "Vision error: ${error.message}" } }
             .build()
 
         handLandmarker = HandLandmarker.createFromOptions(this, options)
@@ -124,43 +125,21 @@ class MainActivity : ComponentActivity() {
 
             provider.unbindAll()
             provider.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, analysis)
-            statusText.text = "Ready — only thumb + index control volume"
         }, ContextCompat.getMainExecutor(this))
     }
 
     private fun processResult(result: HandLandmarkerResult) {
         if (result.landmarks().isEmpty()) {
             smoothedPinchDistance = -1f
-            runOnUiThread {
-                fingerDetectionText.text = "Thumb: —   Index: —   Middle: —   Ring: —   Little: —"
-                statusText.text = "Show your hand"
-            }
+            runOnUiThread { handOverlay.setLandmarks(null) }
             return
         }
 
         val hand = result.landmarks()[0]
         val now = SystemClock.uptimeMillis()
+        runOnUiThread { handOverlay.setLandmarks(hand) }
 
-        val thumbExtended = isThumbExtended(hand)
-        val indexExtended = isIndexExtended(hand)
-        val middleExtended = isFingerExtended(hand, 12, 10, 9)
-        val ringExtended = isFingerExtended(hand, 16, 14, 13)
-        val littleExtended = isFingerExtended(hand, 20, 18, 17)
-
-        runOnUiThread {
-            fingerDetectionText.text = "Thumb: ${state(thumbExtended)}   Index: ${state(indexExtended)}   Middle: ${state(middleExtended)}   Ring: ${state(ringExtended)}   Little: ${state(littleExtended)}"
-        }
-
-        // Only thumb + index matter for volume control.
-        // Middle, ring and little fingers are intentionally ignored.
-        if (!indexExtended || !thumbExtended) {
-            smoothedPinchDistance = -1f
-            runOnUiThread {
-                statusText.text = "Show thumb + index finger — other fingers can be anywhere"
-            }
-            return
-        }
-
+        // Only thumb + index distance controls volume. The other three fingers are ignored.
         val thumb = hand[4]
         val index = hand[8]
         val rawDistance = hypot(thumb.x() - index.x(), thumb.y() - index.y())
@@ -172,63 +151,24 @@ class MainActivity : ComponentActivity() {
         val target = (normalized * max).roundToInt().coerceIn(0, max)
         val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
 
-        if (now - lastVolumeCommand >= 90L && kotlin.math.abs(target - current) >= 1) {
+        if (now - lastVolumeCommand >= 70L && kotlin.math.abs(target - current) >= 1) {
             audioManager.setStreamVolume(AudioManager.STREAM_MUSIC, target, AudioManager.FLAG_SHOW_UI)
             lastVolumeCommand = now
         }
 
-        val percent = (target * 100f / max).roundToInt()
-        runOnUiThread {
-            statusText.text = "Thumb + index distance: $percent%"
-            updateVolumeDisplay()
-        }
+        runOnUiThread { updateVolumeDisplay() }
     }
-
-    private fun state(extended: Boolean): String = if (extended) "OPEN" else "FOLDED"
 
     private fun updateVolumeDisplay() {
         if (!::audioManager.isInitialized || !::volumeText.isInitialized) return
         val current = audioManager.getStreamVolume(AudioManager.STREAM_MUSIC)
         val max = audioManager.getStreamMaxVolume(AudioManager.STREAM_MUSIC).coerceAtLeast(1)
         val percent = (current * 100f / max).roundToInt()
-        volumeText.text = "Phone media volume: $percent%"
+        volumeText.text = "$percent%"
         if (::volumeSlider.isInitialized) {
             volumeSlider.max = max
             volumeSlider.progress = current
         }
-    }
-
-    private fun isIndexExtended(hand: List<NormalizedLandmark>): Boolean =
-        isFingerExtended(hand, 8, 6, 5, 150.0)
-
-    private fun isThumbExtended(hand: List<NormalizedLandmark>): Boolean {
-        val tip = hand[4]
-        val ip = hand[3]
-        val mcp = hand[2]
-        val wrist = hand[0]
-        return distance(tip, wrist) > distance(ip, wrist) * 1.06f &&
-            distance(tip, wrist) > distance(mcp, wrist) * 1.20f &&
-            angle(ip, mcp, tip) > 135.0
-    }
-
-    private fun isFingerExtended(hand: List<NormalizedLandmark>, tip: Int, pip: Int, mcp: Int, minAngle: Double = 145.0): Boolean {
-        val wrist = hand[0]
-        return distance(hand[tip], wrist) > distance(hand[pip], wrist) * 1.10f &&
-            angle(hand[pip], hand[mcp], hand[tip]) > minAngle
-    }
-
-    private fun distance(a: NormalizedLandmark, b: NormalizedLandmark): Float =
-        hypot(a.x() - b.x(), a.y() - b.y())
-
-    private fun angle(a: NormalizedLandmark, b: NormalizedLandmark, c: NormalizedLandmark): Double {
-        val abx = a.x() - b.x()
-        val aby = a.y() - b.y()
-        val cbx = c.x() - b.x()
-        val cby = c.y() - b.y()
-        val denominator = hypot(abx, aby) * hypot(cbx, cby)
-        if (denominator == 0f) return 0.0
-        val cosine = ((abx * cbx + aby * cby) / denominator).coerceIn(-1f, 1f)
-        return Math.toDegrees(kotlin.math.acos(cosine).toDouble())
     }
 
     override fun onDestroy() {
@@ -236,5 +176,65 @@ class MainActivity : ComponentActivity() {
         if (::handLandmarker.isInitialized) handLandmarker.close()
         if (::cameraExecutor.isInitialized) cameraExecutor.shutdown()
         super.onDestroy()
+    }
+}
+
+class HandOverlayView(context: Context) : View(context) {
+    private var landmarks: List<NormalizedLandmark>? = null
+    private val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeWidth = 5f
+        style = Paint.Style.STROKE
+    }
+    private val pointPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.FILL
+    }
+    private val pinchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        strokeWidth = 8f
+        style = Paint.Style.STROKE
+    }
+
+    private val connections = arrayOf(
+        intArrayOf(0, 1), intArrayOf(1, 2), intArrayOf(2, 3), intArrayOf(3, 4),
+        intArrayOf(0, 5), intArrayOf(5, 6), intArrayOf(6, 7), intArrayOf(7, 8),
+        intArrayOf(5, 9), intArrayOf(9, 10), intArrayOf(10, 11), intArrayOf(11, 12),
+        intArrayOf(9, 13), intArrayOf(13, 14), intArrayOf(14, 15), intArrayOf(15, 16),
+        intArrayOf(13, 17), intArrayOf(17, 18), intArrayOf(18, 19), intArrayOf(19, 20),
+        intArrayOf(0, 17)
+    )
+
+    fun setLandmarks(value: List<NormalizedLandmark>?) {
+        landmarks = value
+        invalidate()
+    }
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        val hand = landmarks ?: return
+        if (hand.size < 21 || width <= 0 || height <= 0) return
+
+        linePaint.strokeWidth = 5f
+        for (connection in connections) {
+            val a = hand[connection[0]]
+            val b = hand[connection[1]]
+            canvas.drawLine(a.x() * width, a.y() * height, b.x() * width, b.y() * height, linePaint)
+        }
+
+        for (i in hand.indices) {
+            pointPaint.radius = 8f
+            canvas.drawCircle(hand[i].x() * width, hand[i].y() * height, 8f, pointPaint)
+        }
+
+        val thumb = hand[4]
+        val index = hand[8]
+        pinchPaint.strokeWidth = 9f
+        canvas.drawLine(
+            thumb.x() * width,
+            thumb.y() * height,
+            index.x() * width,
+            index.y() * height,
+            pinchPaint
+        )
+        canvas.drawCircle(thumb.x() * width, thumb.y() * height, 15f, pinchPaint)
+        canvas.drawCircle(index.x() * width, index.y() * height, 15f, pinchPaint)
     }
 }
